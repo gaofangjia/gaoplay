@@ -31,6 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.database.LiveStream
 import com.example.data.database.PlayHistory
+import com.example.data.database.MediaServer
+import com.example.data.repository.WebDavItem
+import com.example.data.repository.WebDavClient
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.example.data.dlna.DlnaDevice
 import com.example.data.repository.LocalVideo
 import com.example.data.repository.VideoFolder
@@ -43,6 +48,7 @@ sealed class DashboardTab(val title: String, val icon: androidx.compose.ui.graph
     object Videos : DashboardTab("视频", AppIcons.Movie)
     object Folders : DashboardTab("文件夹", AppIcons.Folder)
     object LiveStreams : DashboardTab("直播源", AppIcons.RssFeed)
+    object MediaServers : DashboardTab("媒体服务器", AppIcons.Server)
     object HistoryAndCast : DashboardTab("投屏和历史", AppIcons.CastConnected)
 }
 
@@ -59,6 +65,8 @@ fun MainDashboard(
     // Dialog flags
     var showAddStreamDialog by remember { mutableStateOf(false) }
     var currentSelectedFolder by remember { mutableStateOf<VideoFolder?>(null) }
+    var showAddServerDialog by remember { mutableStateOf(false) }
+    var activeServer by remember { mutableStateOf<MediaServer?>(null) }
 
     val scope = rememberCoroutineScope()
 
@@ -138,6 +146,22 @@ fun MainDashboard(
                                 )
                             }
                         }
+
+                        if (selectedTab == DashboardTab.MediaServers && activeServer == null) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(
+                                onClick = { showAddServerDialog = true },
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = "Add Server",
+                                    tint = Color.Black
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -183,6 +207,7 @@ fun MainDashboard(
                     DashboardTab.Videos,
                     DashboardTab.Folders,
                     DashboardTab.LiveStreams,
+                    DashboardTab.MediaServers,
                     DashboardTab.HistoryAndCast
                 )
                 tabs.forEach { tab ->
@@ -215,6 +240,7 @@ fun MainDashboard(
                     currentSelectedFolder = folder
                 }
                 DashboardTab.LiveStreams -> LiveStreamsTab(viewModel, onPlayVideo)
+                DashboardTab.MediaServers -> MediaServersTab(viewModel, onPlayVideo, activeServer, { activeServer = it })
                 DashboardTab.HistoryAndCast -> HistoryAndCastTab(viewModel, onPlayVideo)
             }
 
@@ -234,6 +260,17 @@ fun MainDashboard(
                     onAddStream = { title, url ->
                         viewModel.addLiveStream(title, url)
                         showAddStreamDialog = false
+                    }
+                )
+            }
+
+            // Media Server addition overlay Dialog
+            if (showAddServerDialog) {
+                AddServerDialog(
+                    onDismiss = { showAddServerDialog = false },
+                    onAddServer = { name, address, port, username, password ->
+                        viewModel.addMediaServer(name, address, port, username, password)
+                        showAddServerDialog = false
                     }
                 )
             }
@@ -875,6 +912,464 @@ fun AddStreamDialog(
             Button(
                 onClick = { if (title.isNotEmpty() && url.isNotEmpty()) onAddStream(title, url) },
                 enabled = title.isNotEmpty() && url.isNotEmpty()
+            ) {
+                Text("确认添加")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun MediaServersTab(
+    viewModel: MediaViewModel,
+    onPlayVideo: (String, String) -> Unit,
+    activeServer: MediaServer?,
+    onActiveServerChange: (MediaServer?) -> Unit
+) {
+    val servers by viewModel.mediaServers.collectAsState()
+
+    if (activeServer == null) {
+        if (servers.isEmpty()) {
+            EmptyPlaceholder(
+                icon = AppIcons.Server,
+                message = "没有保存的媒体服务器。\n点击右上角的 '+' 按钮，输入服务配置及账号密码即可连接。"
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(servers, key = { it.id }) { server ->
+                    ServerCardItem(
+                        server = server,
+                        onConnect = { onActiveServerChange(server) },
+                        onDelete = { viewModel.deleteMediaServer(server) }
+                    )
+                }
+            }
+        }
+    } else {
+        ServerFileExplorer(
+            server = activeServer,
+            onBackToServers = { onActiveServerChange(null) },
+            onPlayVideo = onPlayVideo
+        )
+    }
+}
+
+@Composable
+fun ServerCardItem(
+    server: MediaServer,
+    onConnect: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onConnect),
+        colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.04f)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = AppIcons.Server,
+                        contentDescription = "Server",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column {
+                    Text(
+                        text = server.name,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${server.address}:${server.port}",
+                        color = Color.Gray,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "用户: ${server.username.ifEmpty { "匿名" }}",
+                        color = Color.Gray.copy(alpha = 0.8f),
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Row {
+                IconButton(onClick = onConnect) {
+                    Icon(
+                        imageVector = AppIcons.ChevronRight,
+                        contentDescription = "Connect",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Delete",
+                        tint = Color.Red.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ServerFileExplorer(
+    server: MediaServer,
+    onBackToServers: () -> Unit,
+    onPlayVideo: (String, String) -> Unit
+) {
+    var currentPath by remember { mutableStateOf("/") }
+    var items by remember { mutableStateOf<List<WebDavItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val webDavClient = remember { WebDavClient() }
+    val scope = rememberCoroutineScope()
+
+    fun loadPath(path: String) {
+        scope.launch {
+            isLoading = true
+            errorMessage = null
+            try {
+                val fullUrl = if (server.port > 0) {
+                    "${server.address}:${server.port}"
+                } else {
+                    server.address
+                }
+                val result = webDavClient.listFiles(
+                    serverUrl = fullUrl,
+                    username = server.username,
+                    password = server.password,
+                    dirPath = path
+                )
+                items = result
+                currentPath = path
+            } catch (e: Exception) {
+                e.printStackTrace()
+                errorMessage = "无法连接媒体服务器。\n请确认服务器支持 WebDAV、地址端口无误、并已连接同一局域网。"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(server) {
+        loadPath("/")
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B0D10))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.03f))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBackToServers) {
+                Icon(
+                    imageVector = Icons.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color.White
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = server.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = Color.White
+                )
+                Text(
+                    text = currentPath,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            IconButton(onClick = { loadPath(currentPath) }) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = "Refresh",
+                    tint = Color.White
+                )
+            }
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
+        } else if (errorMessage != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = "Error",
+                    tint = Color.Red.copy(alpha = 0.7f),
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = errorMessage!!,
+                    color = Color.Gray,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = { loadPath(currentPath) },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("重试连接", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        } else {
+            if (items.isEmpty() && currentPath == "/") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("当前目录中没有找到可播放的媒体文件", color = Color.Gray, fontSize = 14.sp)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (currentPath != "/") {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val parent = currentPath
+                                            .trimEnd('/')
+                                            .substringBeforeLast("/")
+                                            .ifEmpty { "/" }
+                                        loadPath(parent)
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ArrowBack,
+                                    contentDescription = "Up",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column {
+                                    Text("..", color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("返回上一级目录", color = Color.Gray, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    items(items) { item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = if (item.isDirectory) 0.02f else 0.01f))
+                                .clickable {
+                                    if (item.isDirectory) {
+                                        loadPath(item.path)
+                                    } else {
+                                        onPlayVideo(item.downloadUrl, item.name)
+                                    }
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (item.isDirectory) AppIcons.Folder else AppIcons.Movie,
+                                contentDescription = "ItemType",
+                                tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.name,
+                                    color = Color.White,
+                                    fontWeight = if (item.isDirectory) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 14.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (item.isDirectory) "文件夹" else item.sizeFormatted,
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Icon(
+                                imageVector = AppIcons.ChevronRight,
+                                contentDescription = "Navigate",
+                                tint = Color.DarkGray,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AddServerDialog(
+    onDismiss: () -> Unit,
+    onAddServer: (String, String, Int, String, String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+    var portStr by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加媒体服务器") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("服务器名称 (如: 我的群晖)") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text("服务器 IP 或域名") },
+                    placeholder = { Text("例: 192.168.1.100") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = portStr,
+                    onValueChange = { portStr = it },
+                    label = { Text("端口 (WebDAV 默认 5005)") },
+                    placeholder = { Text("5005") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("登录用户名") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("登录密码") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (name.isNotEmpty() && address.isNotEmpty()) {
+                        val port = portStr.toIntOrNull() ?: 80
+                        onAddServer(name, address, port, username, password)
+                    }
+                },
+                enabled = name.isNotEmpty() && address.isNotEmpty()
             ) {
                 Text("确认添加")
             }

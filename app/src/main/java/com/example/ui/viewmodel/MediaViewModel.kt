@@ -9,6 +9,7 @@ import com.example.data.database.FavoriteMedia
 import com.example.data.database.LiveStream
 import com.example.data.database.MediaDatabase
 import com.example.data.database.PlayHistory
+import com.example.data.database.MediaServer
 import com.example.data.dlna.DlnaController
 import com.example.data.dlna.DlnaDevice
 import com.example.data.repository.LocalVideo
@@ -66,6 +67,9 @@ class MediaViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val liveStreams: StateFlow<List<LiveStream>> = repository.liveStreams
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val mediaServers: StateFlow<List<MediaServer>> = repository.mediaServers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
@@ -143,6 +147,18 @@ class MediaViewModel(
         }
     }
 
+    fun addMediaServer(name: String, address: String, port: Int, username: String, password: String) {
+        viewModelScope.launch {
+            repository.addMediaServer(name, address, port, username, password)
+        }
+    }
+
+    fun deleteMediaServer(server: MediaServer) {
+        viewModelScope.launch {
+            repository.deleteMediaServer(server)
+        }
+    }
+
     // DLNA discovery routines
     fun scanCastDevices() {
         viewModelScope.launch {
@@ -170,7 +186,7 @@ class MediaViewModel(
                     application.applicationContext,
                     MediaDatabase::class.java,
                     "vidx_player_db"
-                ).build()
+                ).fallbackToDestructiveMigration().build()
                 val repository = MediaRepository(application.applicationContext, database.mediaDao())
                 val dlna = DlnaController(application.applicationContext)
                 @Suppress("UNCHECKED_CAST")

@@ -568,4 +568,47 @@ object AppIcons {
             close()
         }.build()
     }
+
+    val Server: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "AppIcons.Server",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).path(fill = SolidColor(Color.White)) {
+            moveTo(20f, 13f)
+            horizontalLineTo(4f)
+            curveTo(2.9f, 13f, 2f, 13.9f, 2f, 15f)
+            verticalLineTo(19f)
+            curveTo(2f, 20.1f, 2.9f, 21f, 4f, 21f)
+            horizontalLineTo(20f)
+            curveTo(21.1f, 21f, 22f, 20.1f, 22f, 19f)
+            verticalLineTo(15f)
+            curveTo(22f, 13.9f, 21.1f, 13f, 20f, 13f)
+            close()
+            moveTo(19f, 18f)
+            curveTo(18.45f, 18f, 18f, 17.55f, 18f, 17f)
+            curveTo(18f, 16.45f, 18.45f, 16f, 19f, 16f)
+            curveTo(19.55f, 16f, 20f, 16.45f, 20f, 17f)
+            curveTo(20f, 17.55f, 19.55f, 18f, 19f, 18f)
+            close()
+            moveTo(20f, 3f)
+            horizontalLineTo(4f)
+            curveTo(2.9f, 3f, 2f, 3.9f, 2f, 5f)
+            verticalLineTo(9f)
+            curveTo(2f, 10.1f, 2.9f, 11f, 4f, 11f)
+            horizontalLineTo(20f)
+            curveTo(21.1f, 11f, 22f, 10.1f, 22f, 9f)
+            verticalLineTo(5f)
+            curveTo(22f, 3.9f, 21.1f, 3f, 20f, 3f)
+            close()
+            moveTo(19f, 8f)
+            curveTo(18.45f, 8f, 18f, 7.55f, 18f, 7f)
+            curveTo(18f, 6.45f, 18.45f, 5.9f, 19f, 5.9f)
+            curveTo(19.55f, 5.9f, 20f, 5.9f, 20f, 7f)
+            curveTo(20f, 7.55f, 19.55f, 8f, 19f, 8f)
+            close()
+        }.build()
+    }
 }

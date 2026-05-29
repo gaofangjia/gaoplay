@@ -8,6 +8,7 @@ import com.example.data.database.FavoriteMedia
 import com.example.data.database.LiveStream
 import com.example.data.database.MediaDao
 import com.example.data.database.PlayHistory
+import com.example.data.database.MediaServer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -123,6 +124,16 @@ class MediaRepository(
 
     suspend fun deleteLiveStream(stream: LiveStream) = withContext(Dispatchers.IO) {
         mediaDao.deleteLiveStream(stream)
+    }
+
+    val mediaServers: Flow<List<MediaServer>> = mediaDao.getMediaServers()
+
+    suspend fun addMediaServer(name: String, address: String, port: Int, username: String, password: String) = withContext(Dispatchers.IO) {
+        mediaDao.insertMediaServer(MediaServer(name = name, address = address, port = port, username = username, password = password))
+    }
+
+    suspend fun deleteMediaServer(server: MediaServer) = withContext(Dispatchers.IO) {
+        mediaDao.deleteMediaServer(server)
     }
 
     /**

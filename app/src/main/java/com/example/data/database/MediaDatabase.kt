@@ -81,9 +81,30 @@ interface MediaDao {
 
     @Delete
     suspend fun deleteLiveStream(stream: LiveStream)
+
+    // Media Servers
+    @Query("SELECT * FROM media_servers ORDER BY addedTimestamp DESC")
+    fun getMediaServers(): Flow<List<MediaServer>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMediaServer(server: MediaServer)
+
+    @Delete
+    suspend fun deleteMediaServer(server: MediaServer)
 }
 
-@Database(entities = [PlayHistory::class, FavoriteMedia::class, LiveStream::class], version = 1, exportSchema = false)
+@Entity(tableName = "media_servers")
+data class MediaServer(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val address: String,
+    val port: Int,
+    val username: String,
+    val password: String,
+    val addedTimestamp: Long = System.currentTimeMillis()
+)
+
+@Database(entities = [PlayHistory::class, FavoriteMedia::class, LiveStream::class, MediaServer::class], version = 2, exportSchema = false)
 abstract class MediaDatabase : RoomDatabase() {
     abstract fun mediaDao(): MediaDao
 }
