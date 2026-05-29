@@ -105,7 +105,7 @@ data class MediaServer(
     val addedTimestamp: Long = System.currentTimeMillis()
 )
 
-@Database(entities = [PlayHistory::class, FavoriteMedia::class, LiveStream::class, MediaServer::class], version = 2, exportSchema = false)
+@Database(entities = [PlayHistory::class, FavoriteMedia::class, LiveStream::class, MediaServer::class], version = 3, exportSchema = false)
 abstract class MediaDatabase : RoomDatabase() {
     abstract fun mediaDao(): MediaDao
 }

@@ -51,6 +51,32 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
+import android.content.ContentUris
+import android.provider.MediaStore
+
+fun getContentUriFromPath(context: Context, filePath: String): Uri {
+    if (filePath.startsWith("content://") || filePath.startsWith("http://") || filePath.startsWith("https://")) {
+        return Uri.parse(filePath)
+    }
+    val file = File(filePath)
+    if (!file.exists()) return Uri.fromFile(file)
+
+    val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(MediaStore.Video.Media._ID)
+    val selection = "${MediaStore.Video.Media.DATA} = ?"
+    val selectionArgs = arrayOf(filePath)
+    try {
+        context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
+                return ContentUris.withAppendedId(uri, id)
+            }
+        }
+    } catch (e: java.lang.Exception) {
+        e.printStackTrace()
+    }
+    return Uri.fromFile(file)
+}
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -109,7 +135,7 @@ fun VideoPlayerScreen(
                     .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                     .build()
 
-                val mediaUri = if (videoPath.startsWith("http")) Uri.parse(videoPath) else Uri.fromFile(File(videoPath))
+                val mediaUri = getContentUriFromPath(context, videoPath)
                 val mediaItem = MediaItem.Builder()
                     .setUri(mediaUri)
                     .setSubtitleConfigurations(listOf(subtitleConfig))
@@ -145,11 +171,7 @@ fun VideoPlayerScreen(
             }
         }
         val rawPlayer = rawBuilder.build().apply {
-            val mediaUri = if (videoPath.startsWith("http")) {
-                Uri.parse(videoPath)
-            } else {
-                Uri.fromFile(File(videoPath))
-            }
+            val mediaUri = getContentUriFromPath(context, videoPath)
             setMediaItem(MediaItem.fromUri(mediaUri))
             prepare()
             playWhenReady = true
