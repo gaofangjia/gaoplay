@@ -101,6 +101,7 @@ data class MediaServer(
     val port: Int,
     val username: String,
     val password: String,
+    val protocol: String = "webdav",
     val addedTimestamp: Long = System.currentTimeMillis()
 )
 

@@ -128,8 +128,8 @@ class MediaRepository(
 
     val mediaServers: Flow<List<MediaServer>> = mediaDao.getMediaServers()
 
-    suspend fun addMediaServer(name: String, address: String, port: Int, username: String, password: String) = withContext(Dispatchers.IO) {
-        mediaDao.insertMediaServer(MediaServer(name = name, address = address, port = port, username = username, password = password))
+    suspend fun addMediaServer(name: String, address: String, port: Int, username: String, password: String, protocol: String) = withContext(Dispatchers.IO) {
+        mediaDao.insertMediaServer(MediaServer(name = name, address = address, port = port, username = username, password = password, protocol = protocol))
     }
 
     suspend fun deleteMediaServer(server: MediaServer) = withContext(Dispatchers.IO) {

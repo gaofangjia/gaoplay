@@ -125,7 +125,26 @@ fun VideoPlayerScreen(
 
     // Initialize ExoPlayer
     DisposableEffect(videoPath) {
-        val rawPlayer = ExoPlayer.Builder(context).build().apply {
+        val rawBuilder = ExoPlayer.Builder(context)
+        if (videoPath.startsWith("http")) {
+            val uri = Uri.parse(videoPath)
+            val userInfo = uri.userInfo
+            if (!userInfo.isNullOrEmpty()) {
+                val decodedUserInfo = try {
+                    java.net.URLDecoder.decode(userInfo, "UTF-8")
+                } catch (e: Exception) {
+                    userInfo
+                }
+                val authString = android.util.Base64.encodeToString(decodedUserInfo.toByteArray(), android.util.Base64.NO_WRAP)
+                val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                    .setDefaultRequestProperties(mapOf("Authorization" to "Basic $authString"))
+                rawBuilder.setMediaSourceFactory(
+                    androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+                        .setDataSourceFactory(httpDataSourceFactory)
+                )
+            }
+        }
+        val rawPlayer = rawBuilder.build().apply {
             val mediaUri = if (videoPath.startsWith("http")) {
                 Uri.parse(videoPath)
             } else {

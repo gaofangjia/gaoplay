@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -268,8 +269,8 @@ fun MainDashboard(
             if (showAddServerDialog) {
                 AddServerDialog(
                     onDismiss = { showAddServerDialog = false },
-                    onAddServer = { name, address, port, username, password ->
-                        viewModel.addMediaServer(name, address, port, username, password)
+                    onAddServer = { name, address, port, username, password, protocol ->
+                        viewModel.addMediaServer(name, address, port, username, password, protocol)
                         showAddServerDialog = false
                     }
                 )
@@ -1005,14 +1006,33 @@ fun ServerCardItem(
                 Spacer(modifier = Modifier.width(16.dp))
 
                 Column {
-                    Text(
-                        text = server.name,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = server.name,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    if (server.protocol == "http") Color(0xFF2196F3).copy(alpha = 0.2f)
+                                    else Color(0xFF4CAF50).copy(alpha = 0.2f)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = if (server.protocol == "http") "HTTP" else "WebDAV",
+                                color = if (server.protocol == "http") Color(0xFF2196F3) else Color(0xFF4CAF50),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "${server.address}:${server.port}",
@@ -1078,13 +1098,14 @@ fun ServerFileExplorer(
                     serverUrl = fullUrl,
                     username = server.username,
                     password = server.password,
-                    dirPath = path
+                    dirPath = path,
+                    protocol = server.protocol
                 )
                 items = result
                 currentPath = path
             } catch (e: Exception) {
                 e.printStackTrace()
-                errorMessage = "无法连接媒体服务器。\n请确认服务器支持 WebDAV、地址端口无误、并已连接同一局域网。"
+                errorMessage = "无法连接媒体服务器。\n请确认服务已开启、地址端口无误、用户名密码正确，并已配对网络环境。"
             } finally {
                 isLoading = false
             }
@@ -1287,13 +1308,14 @@ fun ServerFileExplorer(
 @Composable
 fun AddServerDialog(
     onDismiss: () -> Unit,
-    onAddServer: (String, String, Int, String, String) -> Unit
+    onAddServer: (String, String, Int, String, String, String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var portStr by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf("webdav") } // "webdav" or "http"
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1303,10 +1325,53 @@ fun AddServerDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
+                Text("连接协议类型", color = Color.Gray, fontSize = 11.sp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    listOf(
+                        "webdav" to "WebDAV / NAS 自动探测",
+                        "http" to "HTTP (飞牛影视 / 网页白板)"
+                    ).forEach { (key, label) ->
+                        val selected = protocol == key
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else Color.White.copy(alpha = 0.04f)
+                                )
+                                .border(
+                                    width = 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable { 
+                                    protocol = key
+                                    if (portStr.isEmpty() || portStr == "5005" || portStr == "8005" || portStr == "80") {
+                                        portStr = if (key == "webdav") "5005" else "8005"
+                                    }
+                                }
+                                .padding(vertical = 12.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("服务器名称 (如: 我的群晖)") },
+                    label = { Text("服务器名称 (如: 我的飞牛)") },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent
@@ -1329,8 +1394,8 @@ fun AddServerDialog(
                 OutlinedTextField(
                     value = portStr,
                     onValueChange = { portStr = it },
-                    label = { Text("端口 (WebDAV 默认 5005)") },
-                    placeholder = { Text("5005") },
+                    label = { Text(if (protocol == "webdav") "端口 (默认 5005)" else "端口 (默认 8005)") },
+                    placeholder = { Text(if (protocol == "webdav") "5005" else "8005") },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent
@@ -1365,8 +1430,9 @@ fun AddServerDialog(
             Button(
                 onClick = {
                     if (name.isNotEmpty() && address.isNotEmpty()) {
-                        val port = portStr.toIntOrNull() ?: 80
-                        onAddServer(name, address, port, username, password)
+                        val defaultPort = if (protocol == "webdav") 5005 else 8005
+                        val port = portStr.toIntOrNull() ?: defaultPort
+                        onAddServer(name, address, port, username, password, protocol)
                     }
                 },
                 enabled = name.isNotEmpty() && address.isNotEmpty()

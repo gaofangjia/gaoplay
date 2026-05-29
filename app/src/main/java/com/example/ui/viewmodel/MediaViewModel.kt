@@ -147,9 +147,9 @@ class MediaViewModel(
         }
     }
 
-    fun addMediaServer(name: String, address: String, port: Int, username: String, password: String) {
+    fun addMediaServer(name: String, address: String, port: Int, username: String, password: String, protocol: String) {
         viewModelScope.launch {
-            repository.addMediaServer(name, address, port, username, password)
+            repository.addMediaServer(name, address, port, username, password, protocol)
         }
     }
 
