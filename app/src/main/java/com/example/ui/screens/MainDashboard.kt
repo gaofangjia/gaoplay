@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -245,6 +248,17 @@ fun MainDashboard(
                 DashboardTab.HistoryAndCast -> HistoryAndCastTab(viewModel, onPlayVideo)
             }
 
+            // Back handling for dialog overlays and server views
+            if (currentSelectedFolder != null) {
+                BackHandler { currentSelectedFolder = null }
+            } else if (showAddStreamDialog) {
+                BackHandler { showAddStreamDialog = false }
+            } else if (showAddServerDialog) {
+                BackHandler { showAddServerDialog = false }
+            } else if (activeServer != null) {
+                BackHandler { activeServer = null }
+            }
+
             // Folder Detail Bottom Sheet Sheet or Dialog overlay
             currentSelectedFolder?.let { folder ->
                 FolderVideosDialog(
@@ -260,6 +274,10 @@ fun MainDashboard(
                     onDismiss = { showAddStreamDialog = false },
                     onAddStream = { title, url ->
                         viewModel.addLiveStream(title, url)
+                        showAddStreamDialog = false
+                    },
+                    onAddStreams = { streams ->
+                        viewModel.addLiveStreams(streams)
                         showAddStreamDialog = false
                     }
                 )
@@ -329,27 +347,119 @@ fun FoldersTab(viewModel: MediaViewModel, onFolderClick: (VideoFolder) -> Unit) 
     }
 }
 
+fun parseM3uText(content: String): List<Pair<String, String>> {
+    val results = mutableListOf<Pair<String, String>>()
+    val lines = content.lines()
+    var pendingTitle = ""
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) continue
+        if (trimmed.startsWith("#EXTINF:", ignoreCase = true)) {
+            val commaPos = trimmed.lastIndexOf(',')
+            if (commaPos != -1 && commaPos < trimmed.length - 1) {
+                pendingTitle = trimmed.substring(commaPos + 1).trim()
+            } else {
+                val tvgMatch = "tvg-name=\"([^\"]+)\"".toRegex().find(trimmed)
+                if (tvgMatch != null) {
+                    pendingTitle = tvgMatch.groupValues[1]
+                }
+            }
+        } else if (!trimmed.startsWith("#")) {
+            val streamUrl = trimmed
+            val channelName = if (pendingTitle.isNotEmpty()) pendingTitle else streamUrl.substringAfterLast('/').substringBefore('?')
+            if (channelName.isNotEmpty() && (streamUrl.startsWith("http://") || streamUrl.startsWith("https://") || streamUrl.startsWith("rtsp://") || streamUrl.startsWith("udp://"))) {
+                results.add(Pair(channelName, streamUrl))
+            }
+            pendingTitle = ""
+        }
+    }
+    return results
+}
+
 @Composable
 fun LiveStreamsTab(viewModel: MediaViewModel, onPlayVideo: (String, String) -> Unit) {
     val streams by viewModel.liveStreams.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isImporting by remember { mutableStateOf(false) }
 
-    if (streams.isEmpty()) {
-        EmptyPlaceholder(
-            icon = AppIcons.LiveTv,
-            message = "无本地 M3U8 播放列表频道。\n点击右上角的 '+' 按钮，添加您最爱的 HLS IPTV 网络直播源。"
-        )
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    val m3uFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            scope.launch {
+                isImporting = true
+                try {
+                    val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use {
+                            it.bufferedReader().readText()
+                        } ?: ""
+                    }
+                    val parsed = parseM3uText(text)
+                    if (parsed.isNotEmpty()) {
+                        viewModel.addLiveStreams(parsed)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isImporting = false
+                }
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            items(streams) { stream ->
-                StreamCardItem(
-                    stream = stream,
-                    onPlay = { onPlayVideo(stream.url, stream.title) },
-                    onDelete = { viewModel.deleteLiveStream(stream) }
+            Text(
+                text = "已导入直播频道 (${streams.size})",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 15.sp
+            )
+            Button(
+                onClick = { m3uFilePicker.launch("*/*") },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FileOpen,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isImporting) "解析中..." else "导入 M3U 文件",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+
+        if (streams.isEmpty()) {
+            EmptyPlaceholder(
+                icon = AppIcons.LiveTv,
+                message = "无本地 M3U/M3U8 直播源频道。\n点击上方“导入 M3U 文件”或右上角加号添加网络/本地 IPTV 直播频道。"
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(streams) { stream ->
+                    StreamCardItem(
+                        stream = stream,
+                        onPlay = { onPlayVideo(stream.url, stream.title) },
+                        onDelete = { viewModel.deleteLiveStream(stream) }
+                    )
+                }
             }
         }
     }
@@ -876,45 +986,162 @@ fun FolderVideosDialog(
 @Composable
 fun AddStreamDialog(
     onDismiss: () -> Unit,
-    onAddStream: (String, String) -> Unit
+    onAddStream: (String, String) -> Unit,
+    onAddStreams: (List<Pair<String, String>>) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
+    var m3uContent by remember { mutableStateOf("") }
+    var mode by remember { mutableIntStateOf(0) } // 0: Single, 1: M3U File/Text
+    var parsedCount by remember { mutableStateOf<Int?>(null) }
+    var isParsing by remember { mutableStateOf(false) }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            scope.launch {
+                isParsing = true
+                try {
+                    val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } ?: ""
+                    }
+                    val parsed = parseM3uText(text)
+                    if (parsed.isNotEmpty()) {
+                        onAddStreams(parsed)
+                    } else {
+                        parsedCount = 0
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    parsedCount = 0
+                } finally {
+                    isParsing = false
+                }
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加 IPTV HLS 直播源 (M3U8)") },
+        title = { Text("添加 IPTV 直播源 / M3U 播放列表") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("直播源名称") },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                TabRow(
+                    selectedTabIndex = mode,
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Tab(
+                        selected = mode == 0,
+                        onClick = { mode = 0 },
+                        text = { Text("单频道") }
+                    )
+                    Tab(
+                        selected = mode == 1,
+                        onClick = { mode = 1 },
+                        text = { Text("M3U 导入/解析") }
+                    )
+                }
 
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("M3U8 播放链接 (URL)") },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (mode == 0) {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("直播源名称") },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("M3U8 / Stream 链接 (URL)") },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Button(
+                        onClick = { filePicker.launch("*/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Icon(Icons.Default.FileOpen, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("选择本地 .m3u / .m3u8 文件", color = MaterialTheme.colorScheme.onSecondaryContainer)
+                    }
+
+                    Text("或粘贴 M3U 内容 / 订阅链接:", fontSize = 12.sp, color = Color.Gray)
+
+                    OutlinedTextField(
+                        value = m3uContent,
+                        onValueChange = { m3uContent = it },
+                        label = { Text("M3U 文本或订阅 URL") },
+                        minLines = 3,
+                        maxLines = 5,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (parsedCount != null && parsedCount == 0) {
+                        Text("未识别到有效的 M3U 频道，请检查格式", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (title.isNotEmpty() && url.isNotEmpty()) onAddStream(title, url) },
-                enabled = title.isNotEmpty() && url.isNotEmpty()
+                onClick = {
+                    if (mode == 0) {
+                        if (title.isNotEmpty() && url.isNotEmpty()) onAddStream(title, url)
+                    } else {
+                        if (m3uContent.startsWith("http://") || m3uContent.startsWith("https://")) {
+                            scope.launch {
+                                isParsing = true
+                                try {
+                                    val client = okhttp3.OkHttpClient()
+                                    val req = okhttp3.Request.Builder().url(m3uContent.trim()).build()
+                                    val responseText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        client.newCall(req).execute().use { it.body?.string() ?: "" }
+                                    }
+                                    val parsed = parseM3uText(responseText)
+                                    if (parsed.isNotEmpty()) {
+                                        onAddStreams(parsed)
+                                    } else {
+                                        parsedCount = 0
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    parsedCount = 0
+                                } finally {
+                                    isParsing = false
+                                }
+                            }
+                        } else {
+                            val parsed = parseM3uText(m3uContent)
+                            if (parsed.isNotEmpty()) {
+                                onAddStreams(parsed)
+                            } else {
+                                parsedCount = 0
+                            }
+                        }
+                    }
+                },
+                enabled = !isParsing && ((mode == 0 && title.isNotEmpty() && url.isNotEmpty()) || (mode == 1 && m3uContent.isNotEmpty()))
             ) {
-                Text("确认添加")
+                Text(if (isParsing) "解析中..." else "确认导入")
             }
         },
         dismissButton = {
@@ -1112,6 +1339,19 @@ fun ServerFileExplorer(
         }
     }
 
+    val navigateUp = {
+        if (currentPath != "/") {
+            val parent = currentPath.trimEnd('/').substringBeforeLast('/').ifEmpty { "/" }
+            loadPath(parent)
+        } else {
+            onBackToServers()
+        }
+    }
+
+    BackHandler {
+        navigateUp()
+    }
+
     LaunchedEffect(server) {
         loadPath("/")
     }
@@ -1130,7 +1370,7 @@ fun ServerFileExplorer(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBackToServers) {
+            IconButton(onClick = navigateUp) {
                 Icon(
                     imageVector = Icons.Filled.ArrowBack,
                     contentDescription = "Back",

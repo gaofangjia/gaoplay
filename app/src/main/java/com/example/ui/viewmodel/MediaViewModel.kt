@@ -141,6 +141,14 @@ class MediaViewModel(
         }
     }
 
+    fun addLiveStreams(streams: List<Pair<String, String>>) {
+        viewModelScope.launch {
+            streams.forEach { (title, url) ->
+                repository.addLiveStream(title, url, "M3U Import")
+            }
+        }
+    }
+
     fun deleteLiveStream(stream: LiveStream) {
         viewModelScope.launch {
             repository.deleteLiveStream(stream)

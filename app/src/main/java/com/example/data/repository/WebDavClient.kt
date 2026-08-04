@@ -131,11 +131,13 @@ class WebDavClient {
         sanitizedDir: String,
         credential: String
     ): List<WebDavItem> {
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(fullUrl)
             .get()
-            .addHeader("Authorization", credential)
-            .build()
+        if (username.isNotEmpty()) {
+            requestBuilder.addHeader("Authorization", credential)
+        }
+        val request = requestBuilder.build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IOException("HTTP Listing failed: status ${response.code}")
@@ -153,7 +155,6 @@ class WebDavClient {
         currentDir: String
     ): List<WebDavItem> {
         val items = mutableListOf<WebDavItem>()
-        // Regular expression matching <a href="...">text</a> links
         val linkRegex = "<a\\s+[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>".toRegex(RegexOption.IGNORE_CASE)
         val matches = linkRegex.findAll(html)
 
@@ -161,35 +162,59 @@ class WebDavClient {
 
         for (match in matches) {
             val href = match.groupValues[1].trim()
-            val text = match.groupValues[2].replace(Regex("<[^>]*>"), "").trim()
+            val text = match.groupValues[2].replace(Regex("<[^>]*>"), "").replace("&amp;", "&").trim()
 
-            // Filter out system control anchor parameters
-            if (href.startsWith("?") || href.startsWith("http://") || href.startsWith("https://") || href.startsWith("/")) {
-                if (!href.startsWith(cleanCurrentDir)) continue
+            // Skip query parameters, anchors, javascript, parent directories
+            if (href.startsWith("?") || href.startsWith("#") || href.startsWith("javascript:")) {
+                continue
             }
-            if (href == "../" || href == ".." || text == "Parent Directory" || text == "..") {
+            if (href == "../" || href == ".." || href == "." || href == "./" || 
+                text == "Parent Directory" || text == ".." || text == ".") {
                 continue
             }
 
-            val decodedPathName = try {
-                java.net.URLDecoder.decode(href, "UTF-8")
-            } catch (e: Exception) {
-                href
+            var cleanHref = href
+            if (cleanHref.startsWith("./")) {
+                cleanHref = cleanHref.substring(2)
             }
 
-            val isDirectory = href.endsWith("/")
-            val cleanName = decodedPathName.trimEnd('/')
+            // Determine if href is an absolute HTTP/HTTPS URL
+            val isFullUrl = cleanHref.startsWith("http://") || cleanHref.startsWith("https://")
+            val isAbsolutePath = cleanHref.startsWith("/")
+
+            val sanitizedPath = when {
+                isFullUrl -> {
+                    val pathPart = cleanHref.substringAfter("://").substringAfter("/", "")
+                    if (pathPart.isEmpty()) "/" else "/$pathPart"
+                }
+                isAbsolutePath -> cleanHref
+                else -> if (cleanCurrentDir.isEmpty()) "/$cleanHref" else "$cleanCurrentDir/$cleanHref"
+            }.replace(Regex("/{2,}"), "/")
+
+            // Skip current directory itself
+            if (sanitizedPath == currentDir || sanitizedPath == "$cleanCurrentDir/") {
+                continue
+            }
+
+            val isDirectory = href.endsWith("/") || text.endsWith("/") || (!sanitizedPath.contains(".") && !isFullUrl)
+
+            var cleanName = text.trimEnd('/')
+            if (cleanName.isEmpty() || cleanName == href) {
+                val decodedPathName = try {
+                    java.net.URLDecoder.decode(sanitizedPath, "UTF-8")
+                } catch (e: Exception) {
+                    sanitizedPath
+                }
+                cleanName = decodedPathName.trimEnd('/').substringAfterLast('/')
+            }
 
             if (cleanName.isEmpty() || cleanName == "." || cleanName == "..") {
                 continue
             }
 
-            val fullPath = if (currentDir == "/") "/$href" else "$cleanCurrentDir/$href"
-            val sanitizedPath = if (fullPath.startsWith("/")) fullPath else "/$fullPath"
-
-            val streamUrl = try {
-                val encodedUser = java.net.URLEncoder.encode(username, "UTF-8").replace("+", "%20")
-                val encodedPass = java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20")
+            val streamUrl = if (username.isNotEmpty()) {
+                val encodedUser = try { java.net.URLEncoder.encode(username, "UTF-8").replace("+", "%20") } catch (e: Exception) { username }
+                val encodedPass = try { java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20") } catch (e: Exception) { password }
                 if (baseUrl.startsWith("https://")) {
                     val host = baseUrl.substringAfter("https://")
                     "https://$encodedUser:$encodedPass@$host$sanitizedPath"
@@ -197,15 +222,9 @@ class WebDavClient {
                     val host = baseUrl.substringAfter("http://")
                     "http://$encodedUser:$encodedPass@$host$sanitizedPath"
                 }
-            } catch (e: Exception) {
-                if (baseUrl.startsWith("https://")) {
-                    val host = baseUrl.substringAfter("https://")
-                    "https://$username:$password@$host$sanitizedPath"
-                } else {
-                    val host = baseUrl.substringAfter("http://")
-                    "http://$username:$password@$host$sanitizedPath"
-                }
-            }
+            } else {
+                "$baseUrl$sanitizedPath"
+            }.replace(Regex("(?<!:)/{2,}"), "/")
 
             items.add(
                 WebDavItem(
@@ -217,7 +236,7 @@ class WebDavClient {
                 )
             )
         }
-        return items.sortedWith(compareByDescending<WebDavItem> { it.isDirectory }.thenBy { it.name })
+        return items.distinctBy { it.path }.sortedWith(compareByDescending<WebDavItem> { it.isDirectory }.thenBy { it.name })
     }
 
     private fun parseWebDavXml(
@@ -228,7 +247,6 @@ class WebDavClient {
         currentDir: String
     ): List<WebDavItem> {
         val items = mutableListOf<WebDavItem>()
-        // Regex parsing to robustly extract <response> nodes
         val responseRegex = "<(?:[a-zA-Z0-9]+:)?response>([\\s\\S]*?)</(?:[a-zA-Z0-9]+:)?response>".toRegex(RegexOption.IGNORE_CASE)
         val matches = responseRegex.findAll(xml)
 
@@ -237,13 +255,11 @@ class WebDavClient {
         for (match in matches) {
             val responseContent = match.groupValues[1]
 
-            // Extract href
             val href = "<(?:[a-zA-Z0-9]+:)?href>([\\s\\S]*?)</(?:[a-zA-Z0-9]+:)?href>".toRegex(RegexOption.IGNORE_CASE)
                 .find(responseContent)?.groupValues?.get(1)?.trim() ?: ""
 
             if (href.isEmpty()) continue
 
-            // Decode percent encoded characters
             val decodedPath = try {
                 java.net.URLDecoder.decode(href, "UTF-8")
             } catch (e: Exception) {
@@ -252,14 +268,12 @@ class WebDavClient {
 
             val cleanDecodedPath = decodedPath.trimEnd('/')
 
-            // Skip current directory itself
             if (cleanDecodedPath.equals(cleanCurrentDir, ignoreCase = true) || 
                 cleanDecodedPath.endsWith(cleanCurrentDir, ignoreCase = true) && 
                 cleanDecodedPath.length <= cleanCurrentDir.length) {
                 continue
             }
 
-            // Extract display name or infer from href
             var displayName = "<(?:[a-zA-Z0-9]+:)?displayname>([\\s\\S]*?)</(?:[a-zA-Z0-9]+:)?displayname>".toRegex(RegexOption.IGNORE_CASE)
                 .find(responseContent)?.groupValues?.get(1)?.trim() ?: ""
             
@@ -271,19 +285,15 @@ class WebDavClient {
                 continue
             }
 
-            // Is collection/directory?
             val isDirectory = responseContent.contains("collection", ignoreCase = true) || href.endsWith("/")
 
-            // Extract content size length
             val contentLengthStr = "<(?:[a-zA-Z0-9]+:)?getcontentlength>([\\s\\S]*?)</(?:[a-zA-Z0-9]+:)?getcontentlength>".toRegex(RegexOption.IGNORE_CASE)
                 .find(responseContent)?.groupValues?.get(1)?.trim() ?: "0"
             val size = contentLengthStr.toLongOrNull() ?: 0L
 
-            // Construct basic authentication stream/download URL so ExoPlayer can stream natively
-            // Form: http://user:pass@host/path
-            val streamUrl = try {
-                val encodedUser = java.net.URLEncoder.encode(username, "UTF-8").replace("+", "%20")
-                val encodedPass = java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20")
+            val streamUrl = if (username.isNotEmpty()) {
+                val encodedUser = try { java.net.URLEncoder.encode(username, "UTF-8").replace("+", "%20") } catch (e: Exception) { username }
+                val encodedPass = try { java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20") } catch (e: Exception) { password }
                 if (baseUrl.startsWith("https://")) {
                     val host = baseUrl.substringAfter("https://")
                     "https://$encodedUser:$encodedPass@$host$decodedPath"
@@ -291,15 +301,9 @@ class WebDavClient {
                     val host = baseUrl.substringAfter("http://")
                     "http://$encodedUser:$encodedPass@$host$decodedPath"
                 }
-            } catch (e: Exception) {
-                if (baseUrl.startsWith("https://")) {
-                    val host = baseUrl.substringAfter("https://")
-                    "https://$username:$password@$host$decodedPath"
-                } else {
-                    val host = baseUrl.substringAfter("http://")
-                    "http://$username:$password@$host$decodedPath"
-                }
-            }
+            } else {
+                "$baseUrl$decodedPath"
+            }.replace(Regex("(?<!:)/{2,}"), "/")
 
             items.add(
                 WebDavItem(
@@ -312,7 +316,6 @@ class WebDavClient {
             )
         }
         
-        // Sort: directories first, then other items by name alphabetically
-        return items.sortedWith(compareByDescending<WebDavItem> { it.isDirectory }.thenBy { it.name })
+        return items.distinctBy { it.path }.sortedWith(compareByDescending<WebDavItem> { it.isDirectory }.thenBy { it.name })
     }
 }

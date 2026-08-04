@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -86,6 +87,10 @@ fun VideoPlayerScreen(
     viewModel: MediaViewModel,
     onBack: () -> Unit
 ) {
+    BackHandler {
+        onBack()
+    }
+
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -152,6 +157,10 @@ fun VideoPlayerScreen(
     // Initialize ExoPlayer
     DisposableEffect(videoPath) {
         val rawBuilder = ExoPlayer.Builder(context)
+        val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36")
+
         if (videoPath.startsWith("http")) {
             val uri = Uri.parse(videoPath)
             val userInfo = uri.userInfo
@@ -162,14 +171,14 @@ fun VideoPlayerScreen(
                     userInfo
                 }
                 val authString = android.util.Base64.encodeToString(decodedUserInfo.toByteArray(), android.util.Base64.NO_WRAP)
-                val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
-                    .setDefaultRequestProperties(mapOf("Authorization" to "Basic $authString"))
-                rawBuilder.setMediaSourceFactory(
-                    androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
-                        .setDataSourceFactory(httpDataSourceFactory)
-                )
+                httpDataSourceFactory.setDefaultRequestProperties(mapOf("Authorization" to "Basic $authString"))
             }
         }
+
+        rawBuilder.setMediaSourceFactory(
+            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+                .setDataSourceFactory(httpDataSourceFactory)
+        )
         val rawPlayer = rawBuilder.build().apply {
             val mediaUri = getContentUriFromPath(context, videoPath)
             setMediaItem(MediaItem.fromUri(mediaUri))
@@ -301,6 +310,7 @@ fun VideoPlayerScreen(
                     var lastY = 0f
                     var dragDirection = 0 // 1: Horizontal seek, 2: Left drag (brightness), 3: Right drag (volume)
                     var initialSeekingProgress = 0L
+                    var accumulatedVolumeFloat = 0f
 
                     detectDragGestures(
                         onDragStart = { offset ->
@@ -308,6 +318,9 @@ fun VideoPlayerScreen(
                             lastY = offset.y
                             dragDirection = 0 // Undetermined
                             initialSeekingProgress = player?.currentPosition ?: 0L
+                            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat().coerceAtLeast(1f)
+                            val curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+                            accumulatedVolumeFloat = curVol / maxVol
                         },
                         onDrag = { change, dragAmount ->
                             val screenWidth = size.width
@@ -348,12 +361,13 @@ fun VideoPlayerScreen(
                                 3 -> {
                                     // Volume level setting
                                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                                    val curVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                    val volDelta = -dragAmount.y / screenHeight
-                                    val stepsDelta = (volDelta * maxVolume * 1.5f).toInt()
-                                    val targetVol = (curVolume + stepsDelta).coerceIn(0, maxVolume)
-                                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
-                                    gestureOverlayVolume = targetVol.toFloat() / maxVolume.toFloat()
+                                    if (maxVolume > 0) {
+                                        val volDelta = -dragAmount.y / screenHeight
+                                        accumulatedVolumeFloat = (accumulatedVolumeFloat + volDelta * 1.5f).coerceIn(0f, 1f)
+                                        val targetVol = kotlin.math.round(accumulatedVolumeFloat * maxVolume).toInt().coerceIn(0, maxVolume)
+                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                                        gestureOverlayVolume = accumulatedVolumeFloat
+                                    }
                                 }
                             }
                         },
