@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -74,6 +75,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF0F1216)
                 ) {
+                    if (currentPlayingVideo != null) {
+                        BackHandler(enabled = true) {
+                            currentPlayingVideo = null
+                        }
+                    }
+
                     when {
                         // Render video full bleed if playing inside Picture-in-Picture
                         isInPipMode && currentPlayingVideo != null -> {

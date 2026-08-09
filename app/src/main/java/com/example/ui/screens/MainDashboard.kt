@@ -349,7 +349,8 @@ fun FoldersTab(viewModel: MediaViewModel, onFolderClick: (VideoFolder) -> Unit) 
 
 fun parseM3uText(content: String): List<Pair<String, String>> {
     val results = mutableListOf<Pair<String, String>>()
-    val lines = content.lines()
+    val cleanContent = content.removePrefix("\uFEFF")
+    val lines = cleanContent.lines()
     var pendingTitle = ""
     for (line in lines) {
         val trimmed = line.trim()
@@ -360,14 +361,23 @@ fun parseM3uText(content: String): List<Pair<String, String>> {
                 pendingTitle = trimmed.substring(commaPos + 1).trim()
             } else {
                 val tvgMatch = "tvg-name=\"([^\"]+)\"".toRegex().find(trimmed)
+                    ?: "group-title=\"([^\"]+)\"".toRegex().find(trimmed)
                 if (tvgMatch != null) {
-                    pendingTitle = tvgMatch.groupValues[1]
+                    pendingTitle = tvgMatch.groupValues[1].trim()
                 }
             }
         } else if (!trimmed.startsWith("#")) {
             val streamUrl = trimmed
-            val channelName = if (pendingTitle.isNotEmpty()) pendingTitle else streamUrl.substringAfterLast('/').substringBefore('?')
-            if (channelName.isNotEmpty() && (streamUrl.startsWith("http://") || streamUrl.startsWith("https://") || streamUrl.startsWith("rtsp://") || streamUrl.startsWith("udp://"))) {
+            val channelName = if (pendingTitle.isNotEmpty()) pendingTitle else streamUrl.substringAfterLast('/').substringBefore('?').substringBefore('#')
+            val lowerUrl = streamUrl.lowercase()
+            if (channelName.isNotEmpty() && (
+                lowerUrl.startsWith("http://") || 
+                lowerUrl.startsWith("https://") || 
+                lowerUrl.startsWith("rtsp://") || 
+                lowerUrl.startsWith("rtmp://") || 
+                lowerUrl.startsWith("udp://") || 
+                lowerUrl.contains(".m3u8")
+            )) {
                 results.add(Pair(channelName, streamUrl))
             }
             pendingTitle = ""
@@ -944,7 +954,6 @@ fun FolderVideosDialog(
                             .background(Color.White.copy(alpha = 0.05f))
                             .clickable {
                                 onPlayVideo(video.filePath, video.title)
-                                onDismiss()
                             }
                             .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically

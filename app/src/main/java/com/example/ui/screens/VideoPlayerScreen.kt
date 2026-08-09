@@ -56,8 +56,21 @@ import android.content.ContentUris
 import android.provider.MediaStore
 
 fun getContentUriFromPath(context: Context, filePath: String): Uri {
-    if (filePath.startsWith("content://") || filePath.startsWith("http://") || filePath.startsWith("https://")) {
-        return Uri.parse(filePath)
+    val cleanPath = filePath.trim()
+    if (cleanPath.startsWith("content://", ignoreCase = true) || 
+        cleanPath.startsWith("http://", ignoreCase = true) || 
+        cleanPath.startsWith("https://", ignoreCase = true)) {
+        val parsed = Uri.parse(cleanPath)
+        val userInfo = parsed.userInfo
+        if (!userInfo.isNullOrEmpty()) {
+            val scheme = parsed.scheme ?: "http"
+            val host = parsed.host ?: ""
+            val port = if (parsed.port != -1) ":${parsed.port}" else ""
+            val path = parsed.encodedPath ?: ""
+            val query = if (parsed.encodedQuery != null) "?${parsed.encodedQuery}" else ""
+            return Uri.parse("$scheme://$host$port$path$query")
+        }
+        return parsed
     }
     val file = File(filePath)
     if (!file.exists()) return Uri.fromFile(file)
@@ -161,17 +174,22 @@ fun VideoPlayerScreen(
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36")
 
-        if (videoPath.startsWith("http")) {
-            val uri = Uri.parse(videoPath)
-            val userInfo = uri.userInfo
-            if (!userInfo.isNullOrEmpty()) {
-                val decodedUserInfo = try {
-                    java.net.URLDecoder.decode(userInfo, "UTF-8")
-                } catch (e: Exception) {
-                    userInfo
+        val trimmedPath = videoPath.trim()
+        if (trimmedPath.startsWith("http://", ignoreCase = true) || trimmedPath.startsWith("https://", ignoreCase = true)) {
+            try {
+                val uri = Uri.parse(trimmedPath)
+                val userInfo = uri.userInfo
+                if (!userInfo.isNullOrEmpty()) {
+                    val decodedUserInfo = try {
+                        java.net.URLDecoder.decode(userInfo, "UTF-8")
+                    } catch (e: Exception) {
+                        userInfo
+                    }
+                    val authString = android.util.Base64.encodeToString(decodedUserInfo.toByteArray(), android.util.Base64.NO_WRAP)
+                    httpDataSourceFactory.setDefaultRequestProperties(mapOf("Authorization" to "Basic $authString"))
                 }
-                val authString = android.util.Base64.encodeToString(decodedUserInfo.toByteArray(), android.util.Base64.NO_WRAP)
-                httpDataSourceFactory.setDefaultRequestProperties(mapOf("Authorization" to "Basic $authString"))
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
@@ -181,7 +199,16 @@ fun VideoPlayerScreen(
         )
         val rawPlayer = rawBuilder.build().apply {
             val mediaUri = getContentUriFromPath(context, videoPath)
-            setMediaItem(MediaItem.fromUri(mediaUri))
+            val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
+            
+            // Explicitly set MimeType for HLS / M3U8 streams
+            val pathLower = trimmedPath.lowercase()
+            if (pathLower.contains(".m3u8") || pathLower.contains("m3u8") || 
+                (pathLower.startsWith("http") && (pathLower.contains("live") || pathLower.contains("stream")))) {
+                mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+            }
+
+            setMediaItem(mediaItemBuilder.build())
             prepare()
             playWhenReady = true
         }
@@ -306,68 +333,84 @@ fun VideoPlayerScreen(
                 .pointerInput(isLocked) {
                     if (isLocked) return@pointerInput
 
-                    var lastX = 0f
-                    var lastY = 0f
+                    var startTouchX = 0f
+                    var startTouchY = 0f
                     var dragDirection = 0 // 1: Horizontal seek, 2: Left drag (brightness), 3: Right drag (volume)
                     var initialSeekingProgress = 0L
-                    var accumulatedVolumeFloat = 0f
+                    var initialBrightness = 0.5f
+                    var initialVolumeFloat = 0.5f
 
                     detectDragGestures(
                         onDragStart = { offset ->
-                            lastX = offset.x
-                            lastY = offset.y
+                            startTouchX = offset.x
+                            startTouchY = offset.y
                             dragDirection = 0 // Undetermined
                             initialSeekingProgress = player?.currentPosition ?: 0L
-                            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).toFloat().coerceAtLeast(1f)
-                            val curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
-                            accumulatedVolumeFloat = curVol / maxVol
+                            
+                            // Retrieve window initial brightness
+                            activity?.let { act ->
+                                val curB = act.window.attributes.screenBrightness
+                                initialBrightness = if (curB < 0f) 0.5f else curB
+                            }
+
+                            // Retrieve system initial volume
+                            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                            val curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            initialVolumeFloat = if (maxVol > 0) curVol.toFloat() / maxVol.toFloat() else (player?.volume ?: 0.5f)
                         },
                         onDrag = { change, dragAmount ->
                             val screenWidth = size.width
                             val screenHeight = size.height
 
-                            // Establish major movement axis
+                            // Establish major movement axis at drag start
                             if (dragDirection == 0) {
                                 dragDirection = if (abs(dragAmount.x) > abs(dragAmount.y)) {
                                     1 // Seek
-                                } else if (change.position.x < screenWidth / 2) {
-                                    2 // Brightness local control
+                                } else if (startTouchX < screenWidth / 2f) {
+                                    2 // Left side: Brightness
                                 } else {
-                                    3 // Volume index control
+                                    3 // Right side: Volume
                                 }
                             }
+
+                            val deltaY = (startTouchY - change.position.y) / (screenHeight * 0.4f)
 
                             when (dragDirection) {
                                 1 -> {
                                     // Seeking
-                                    val swipePercent = (change.position.x - lastX) / screenWidth
+                                    val swipePercent = (change.position.x - startTouchX) / screenWidth
                                     val timeDelta = (swipePercent * duration * 0.35f).toLong() // Dampened swipe
                                     val targetSeek = (initialSeekingProgress + timeDelta).coerceIn(0, duration)
                                     gestureOverlaySeekTime = targetSeek
                                 }
                                 2 -> {
-                                    // Brightness modification (0.0 to 1.0)
+                                    // Left side: Brightness modification (0.01 to 1.0)
                                     activity?.let { act ->
+                                        val targetBright = (initialBrightness + deltaY).coerceIn(0.01f, 1.0f)
                                         val lp = act.window.attributes
-                                        var currentBright = lp.screenBrightness
-                                        if (currentBright < 0) currentBright = 0.5f // Default standard
-                                        val brightnessDelta = -dragAmount.y / screenHeight
-                                        val targetBright = (currentBright + brightnessDelta).coerceIn(0.01f, 1.0f)
                                         lp.screenBrightness = targetBright
                                         act.window.attributes = lp
                                         gestureOverlayBrightness = targetBright
                                     }
                                 }
                                 3 -> {
-                                    // Volume level setting
+                                    // Right side: Volume modification (0.0 to 1.0)
                                     val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                                    val targetVolFloat = (initialVolumeFloat + deltaY).coerceIn(0f, 1f)
+                                    
+                                    // Direct volume adjustment on ExoPlayer
+                                    player?.volume = targetVolFloat
+                                    
+                                    // Adjust system stream volume
                                     if (maxVolume > 0) {
-                                        val volDelta = -dragAmount.y / screenHeight
-                                        accumulatedVolumeFloat = (accumulatedVolumeFloat + volDelta * 1.5f).coerceIn(0f, 1f)
-                                        val targetVol = kotlin.math.round(accumulatedVolumeFloat * maxVolume).toInt().coerceIn(0, maxVolume)
-                                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
-                                        gestureOverlayVolume = accumulatedVolumeFloat
+                                        val targetVolInt = kotlin.math.round(targetVolFloat * maxVolume).toInt().coerceIn(0, maxVolume)
+                                        try {
+                                            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolInt, 0)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
                                     }
+                                    gestureOverlayVolume = targetVolFloat
                                 }
                             }
                         },

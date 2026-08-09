@@ -138,12 +138,38 @@ class WebDavClient {
             requestBuilder.addHeader("Authorization", credential)
         }
         val request = requestBuilder.build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("HTTP Listing failed: status ${response.code}")
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    if (response.code == 405) {
+                        // Method not allowed for GET, fallback to PROPFIND
+                        val propfindBody = """
+                            <?xml version="1.0" encoding="utf-8" ?>
+                            <propfind xmlns="DAV:"><prop><displayname/><getcontentlength/><resourcetype/></prop></propfind>
+                        """.trimIndent()
+                        val reqBody = propfindBody.toRequestBody("text/xml; charset=utf-8".toMediaType())
+                        val pfReq = Request.Builder().url(fullUrl).method("PROPFIND", reqBody).addHeader("Authorization", credential).addHeader("Depth", "1").build()
+                        client.newCall(pfReq).execute().use { pfResp ->
+                            if (pfResp.isSuccessful) {
+                                val pfBody = pfResp.body?.string() ?: ""
+                                return parseWebDavXml(pfBody, baseUrl, username, password, sanitizedDir)
+                            }
+                        }
+                    }
+                    throw IOException("HTTP Listing failed: status ${response.code}")
+                }
+                val bodyString = response.body?.string() ?: ""
+                
+                // If response is WebDAV XML despite HTTP GET request
+                if (bodyString.contains("<multistatus", ignoreCase = true) || bodyString.contains("<response>", ignoreCase = true) || bodyString.contains(":response>", ignoreCase = true)) {
+                    return parseWebDavXml(bodyString, baseUrl, username, password, sanitizedDir)
+                }
+
+                return parseHttpAutoindex(bodyString, baseUrl, username, password, sanitizedDir)
             }
-            val htmlString = response.body?.string() ?: ""
-            return parseHttpAutoindex(htmlString, baseUrl, username, password, sanitizedDir)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            throw e
         }
     }
 
@@ -179,7 +205,7 @@ class WebDavClient {
             }
 
             // Determine if href is an absolute HTTP/HTTPS URL
-            val isFullUrl = cleanHref.startsWith("http://") || cleanHref.startsWith("https://")
+            val isFullUrl = cleanHref.startsWith("http://", ignoreCase = true) || cleanHref.startsWith("https://", ignoreCase = true)
             val isAbsolutePath = cleanHref.startsWith("/")
 
             val sanitizedPath = when {
@@ -196,7 +222,8 @@ class WebDavClient {
                 continue
             }
 
-            val isDirectory = href.endsWith("/") || text.endsWith("/") || (!sanitizedPath.contains(".") && !isFullUrl)
+            val filename = sanitizedPath.substringAfterLast('/')
+            val isDirectory = href.endsWith("/") || text.endsWith("/") || (!filename.contains(".") && !isFullUrl)
 
             var cleanName = text.trimEnd('/')
             if (cleanName.isEmpty() || cleanName == href) {
@@ -215,7 +242,7 @@ class WebDavClient {
             val streamUrl = if (username.isNotEmpty()) {
                 val encodedUser = try { java.net.URLEncoder.encode(username, "UTF-8").replace("+", "%20") } catch (e: Exception) { username }
                 val encodedPass = try { java.net.URLEncoder.encode(password, "UTF-8").replace("+", "%20") } catch (e: Exception) { password }
-                if (baseUrl.startsWith("https://")) {
+                if (baseUrl.startsWith("https://", ignoreCase = true)) {
                     val host = baseUrl.substringAfter("https://")
                     "https://$encodedUser:$encodedPass@$host$sanitizedPath"
                 } else {
