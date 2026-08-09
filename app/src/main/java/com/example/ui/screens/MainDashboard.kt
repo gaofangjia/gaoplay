@@ -428,7 +428,7 @@ fun LiveStreamsTab(viewModel: MediaViewModel, onPlayVideo: (String, String) -> U
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Icon(
-                    imageVector = AppIcons.FileOpen,
+                    imageVector = Icons.Default.FileOpen,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onPrimaryContainer
@@ -1075,7 +1075,7 @@ fun AddStreamDialog(
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                     ) {
-                        Icon(AppIcons.FileOpen, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Icon(Icons.Default.FileOpen, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("选择本地 .m3u / .m3u8 文件", color = MaterialTheme.colorScheme.onSecondaryContainer)
                     }
